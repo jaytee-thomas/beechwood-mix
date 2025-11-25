@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { Audio } from 'expo-av';
+import MixEngine from '../utils/MixEngine';
+import WaveformView from './WaveformView';
 
 export default function Controls({ 
   songs, 
@@ -10,18 +11,16 @@ export default function Controls({
   currentSongIndex,
   setCurrentSongIndex,
   targetBPM,
-  fadeDuration 
+  fadeDuration,
+  playbackState,
+  setPlaybackState,
 }) {
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
-  const soundRef = useRef(null);
 
   useEffect(() => {
+    MixEngine.initialize();
     return () => {
-      if (soundRef.current) {
-        soundRef.current.unloadAsync();
-      }
+      MixEngine.stop();
     };
   }, []);
 
@@ -32,59 +31,30 @@ export default function Controls({
       return;
     }
 
-    // Heavy haptic for main action
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
     setIsLoading(true);
 
     try {
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-      });
-
-      if (soundRef.current) {
-        await soundRef.current.unloadAsync();
-      }
-
-      const song = songs[currentSongIndex];
-      const playbackRate = targetBPM / song.originalBPM;
-
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: song.uri },
-        { 
-          shouldPlay: true,
-          rate: playbackRate,
-          shouldCorrectPitch: true,
+      await MixEngine.startMix(
+        songs,
+        targetBPM,
+        fadeDuration,
+        (state) => {
+          setPlaybackState(state);
+          setCurrentSongIndex(state.currentIndex);
+        },
+        () => {
+          setIsPlaying(false);
+          setCurrentSongIndex(0);
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         }
       );
 
-      soundRef.current = sound;
-
-      sound.setOnPlaybackStatusUpdate((status) => {
-        if (status.isLoaded) {
-          setCurrentTime(status.positionMillis / 1000);
-          setDuration(status.durationMillis / 1000);
-
-          if (status.didJustFinish) {
-            if (currentSongIndex < songs.length - 1) {
-              setCurrentSongIndex(currentSongIndex + 1);
-              playMix();
-            } else {
-              setIsPlaying(false);
-              setCurrentSongIndex(0);
-              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-            }
-          }
-        }
-      });
-
       setIsPlaying(true);
-      // Success haptic
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
-      // Error haptic
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      Alert.alert('Playback Error', 'Could not play audio');
+      Alert.alert('Playback Error', 'Could not play mix');
       console.error(error);
     } finally {
       setIsLoading(false);
@@ -92,30 +62,31 @@ export default function Controls({
   };
 
   const pauseMix = async () => {
-    // Medium haptic
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    
-    if (soundRef.current) {
-      await soundRef.current.pauseAsync();
-      setIsPlaying(false);
-    }
+    await MixEngine.pause();
+    setIsPlaying(false);
+  };
+
+  const resumeMix = async () => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await MixEngine.resume();
+    setIsPlaying(true);
   };
 
   const stopMix = async () => {
-    // Heavy haptic for destructive action
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    
-    if (soundRef.current) {
-      await soundRef.current.stopAsync();
-      await soundRef.current.unloadAsync();
-      soundRef.current = null;
-    }
+    await MixEngine.stop();
     setIsPlaying(false);
     setCurrentSongIndex(0);
-    setCurrentTime(0);
-    
-    // Light success haptic
+    setPlaybackState({ currentTime: 0, duration: 0, isCrossfading: false });
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+  };
+
+  const handleSeek = async (direction) => {
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    const seekAmount = direction === 'forward' ? 10 : -10;
+    const newPosition = Math.max(0, Math.min(playbackState.duration, playbackState.currentTime + seekAmount));
+    await MixEngine.seek(newPosition);
   };
 
   const formatTime = (seconds) => {
@@ -124,18 +95,68 @@ export default function Controls({
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  const currentSong = songs[currentSongIndex];
+  const progress = playbackState.duration > 0 
+    ? (playbackState.currentTime / playbackState.duration) * 100 
+    : 0;
+
   return (
     <View style={styles.container}>
       {songs.length > 0 && (
-        <View style={styles.nowPlaying}>
-          <Text style={styles.nowPlayingLabel}>Now Playing:</Text>
-          <Text style={styles.songName} numberOfLines={1}>
-            {songs[currentSongIndex]?.name || 'No song'}
-          </Text>
-          <Text style={styles.timeDisplay}>
-            {formatTime(currentTime)} / {formatTime(duration)}
-          </Text>
-        </View>
+        <>
+          <View style={styles.nowPlaying}>
+            <Text style={styles.nowPlayingLabel}>
+              {playbackState.isCrossfading ? '🎛️ MIXING TRACKS' : 'Now Playing:'}
+            </Text>
+            <Text style={styles.songName} numberOfLines={1}>
+              {currentSong?.name || 'No song'}
+            </Text>
+            {playbackState.isCrossfading && songs[currentSongIndex + 1] && (
+              <Text style={styles.nextSong} numberOfLines={1}>
+                ↓ Blending into: {songs[currentSongIndex + 1].name}
+              </Text>
+            )}
+          </View>
+
+          {/* Waveform Visualization */}
+          <View style={styles.waveformContainer}>
+            <WaveformView
+              duration={playbackState.duration}
+              currentTime={playbackState.currentTime}
+              color={playbackState.isCrossfading ? '#ff6b6b' : '#00ff88'}
+              height={100}
+              zoomEnabled={true}
+              seed={currentSongIndex}
+            />
+          </View>
+
+          {/* Time Display and Progress Bar */}
+          <View style={styles.timeContainer}>
+            <Text style={styles.timeText}>{formatTime(playbackState.currentTime)}</Text>
+            <View style={styles.progressBar}>
+              <View style={[styles.progressFill, { width: `${progress}%` }]} />
+            </View>
+            <Text style={styles.timeText}>{formatTime(playbackState.duration)}</Text>
+          </View>
+
+          {/* Seek Buttons */}
+          <View style={styles.seekButtons}>
+            <TouchableOpacity 
+              style={styles.seekButton}
+              onPress={() => handleSeek('backward')}
+              disabled={!isPlaying}
+            >
+              <Text style={styles.seekButtonText}>⏪ 10s</Text>
+            </TouchableOpacity>
+            <TouchableOpacity 
+              style={styles.seekButton}
+              onPress={() => handleSeek('forward')}
+              disabled={!isPlaying}
+            >
+              <Text style={styles.seekButtonText}>10s ⏩</Text>
+            </TouchableOpacity>
+          </View>
+        </>
       )}
 
       <View style={styles.buttons}>
@@ -167,6 +188,12 @@ export default function Controls({
           <Text style={styles.buttonText}>⏹ Stop</Text>
         </TouchableOpacity>
       </View>
+
+      {songs.length > 0 && (
+        <Text style={styles.hint}>
+          💡 Songs will automatically blend together at {targetBPM} BPM
+        </Text>
+      )}
     </View>
   );
 }
@@ -186,6 +213,7 @@ const styles = StyleSheet.create({
     color: '#00ccff',
     fontSize: 12,
     marginBottom: 5,
+    fontWeight: 'bold',
   },
   songName: {
     color: '#fff',
@@ -193,14 +221,65 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     marginBottom: 5,
   },
-  timeDisplay: {
-    color: '#00ff88',
+  nextSong: {
+    color: '#ff6b6b',
     fontSize: 14,
+    fontStyle: 'italic',
+  },
+  waveformContainer: {
+    marginBottom: 15,
+    alignItems: 'center',
+  },
+  timeContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  timeText: {
+    color: '#00ff88',
+    fontSize: 12,
     fontFamily: 'monospace',
+    minWidth: 40,
+  },
+  progressBar: {
+    flex: 1,
+    height: 6,
+    backgroundColor: '#1a1a2e',
+    borderRadius: 3,
+    marginHorizontal: 10,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#00ff88',
+    borderRadius: 3,
+  },
+  seekButtons: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: 20,
+    marginBottom: 15,
+  },
+  seekButton: {
+    backgroundColor: '#16213e',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#00ccff',
+  },
+  seekerButtonDisabled: {
+    opacity: 0.5,
+  },
+  seekButtonText: {
+    color: '#00ccff',
+    fontSize: 14,
+    fontWeight: 'bold',
   },
   buttons: {
     flexDirection: 'row',
     justifyContent: 'space-around',
+    marginBottom: 10,
   },
   button: {
     flex: 1,
@@ -227,5 +306,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
     color: '#000',
+  },
+  hint: {
+    textAlign: 'center',
+    color: '#666',
+    fontSize: 11,
+    fontStyle: 'italic',
   },
 });

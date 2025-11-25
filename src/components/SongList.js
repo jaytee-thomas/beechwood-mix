@@ -165,9 +165,9 @@ function AnimatedSongItem({ song, index, syncedDuration, targetBPM, onRemove }) 
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
     backgroundColor: '#0f3460',
     padding: 15,
+    maxHeight: 300,
   },
   header: {
     flexDirection: 'row',
