@@ -1,7 +1,30 @@
 import React from 'react';
 import { View, Text, StyleSheet, TextInput } from 'react-native';
+import * as Haptics from 'expo-haptics';
 
 export default function Header({ targetBPM, setTargetBPM, fadeDuration, setFadeDuration }) {
+  const handleBPMChange = async (text) => {
+    const value = parseInt(text) || 128;
+    const newValue = Math.max(60, Math.min(200, value));
+    setTargetBPM(newValue);
+    
+    // Light haptic on value change
+    if (text && newValue !== targetBPM) {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+  };
+
+  const handleFadeChange = async (text) => {
+    const value = parseInt(text) || 8;
+    const newValue = Math.max(2, Math.min(20, value));
+    setFadeDuration(newValue);
+    
+    // Light haptic on value change
+    if (text && newValue !== fadeDuration) {
+      await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    }
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>🎧 Beechwood Mix</Text>
@@ -13,10 +36,7 @@ export default function Header({ targetBPM, setTargetBPM, fadeDuration, setFadeD
           <TextInput
             style={styles.input}
             value={targetBPM.toString()}
-            onChangeText={(text) => {
-              const value = parseInt(text) || 128;
-              setTargetBPM(Math.max(60, Math.min(200, value)));
-            }}
+            onChangeText={handleBPMChange}
             keyboardType="numeric"
           />
         </View>
@@ -26,10 +46,7 @@ export default function Header({ targetBPM, setTargetBPM, fadeDuration, setFadeD
           <TextInput
             style={styles.input}
             value={fadeDuration.toString()}
-            onChangeText={(text) => {
-              const value = parseInt(text) || 8;
-              setFadeDuration(Math.max(2, Math.min(20, value)));
-            }}
+            onChangeText={handleFadeChange}
             keyboardType="numeric"
           />
         </View>
@@ -84,4 +101,3 @@ const styles = StyleSheet.create({
     borderColor: '#00ff88',
   },
 });
-

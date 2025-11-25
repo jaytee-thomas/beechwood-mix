@@ -1,11 +1,19 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert, ActivityIndicator, Animated } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
+import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
 
 export default function SongList({ songs, addSong, removeSong, targetBPM }) {
+  const [isLoading, setIsLoading] = useState(false);
+
   const pickSong = async () => {
+    // Light haptic when user taps
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    
     try {
+      setIsLoading(true);
+      
       const result = await DocumentPicker.getDocumentAsync({
         type: 'audio/*',
         copyToCacheDirectory: true,
@@ -30,11 +38,27 @@ export default function SongList({ songs, addSong, removeSong, targetBPM }) {
           uri: file.uri,
           duration: durationSeconds,
         });
+
+        // Success haptic
+        await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } else {
+        // Cancelled - light haptic
+        await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       }
     } catch (error) {
+      // Error haptic
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Error', 'Failed to load audio file');
       console.error(error);
+    } finally {
+      setIsLoading(false);
     }
+  };
+
+  const handleRemoveSong = async (id) => {
+    // Medium haptic for destructive action
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    removeSong(id);
   };
 
   const calculateSyncedDuration = (originalBPM, duration) => {
@@ -46,13 +70,21 @@ export default function SongList({ songs, addSong, removeSong, targetBPM }) {
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Your Tracks ({songs.length})</Text>
-        <TouchableOpacity style={styles.addButton} onPress={pickSong}>
-          <Text style={styles.addButtonText}>+ Add Song</Text>
+        <TouchableOpacity 
+          style={[styles.addButton, isLoading && styles.addButtonDisabled]} 
+          onPress={pickSong}
+          disabled={isLoading}
+        >
+          {isLoading ? (
+            <ActivityIndicator color="#000" size="small" />
+          ) : (
+            <Text style={styles.addButtonText}>+ Add Song</Text>
+          )}
         </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.songList} showsVerticalScrollIndicator={false}>
-        {songs.length === 0 ? (
+        {songs.length === 0 && !isLoading ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyText}>No songs yet</Text>
             <Text style={styles.emptySubtext}>Tap "+ Add Song" to get started</Text>
@@ -61,30 +93,73 @@ export default function SongList({ songs, addSong, removeSong, targetBPM }) {
           songs.map((song, index) => {
             const syncedDuration = calculateSyncedDuration(song.originalBPM, song.duration);
             return (
-              <View key={song.id} style={styles.songItem}>
-                <View style={styles.songInfo}>
-                  <Text style={styles.songNumber}>{index + 1}</Text>
-                  <View style={styles.songDetails}>
-                    <Text style={styles.songName} numberOfLines={1}>
-                      {song.name}
-                    </Text>
-                    <Text style={styles.songMeta}>
-                      {song.originalBPM.toFixed(0)} BPM → {targetBPM} BPM | {syncedDuration.toFixed(0)}s
-                    </Text>
-                  </View>
-                </View>
-                <TouchableOpacity 
-                  style={styles.removeButton}
-                  onPress={() => removeSong(song.id)}
-                >
-                  <Text style={styles.removeButtonText}>✕</Text>
-                </TouchableOpacity>
-              </View>
+              <AnimatedSongItem
+                key={song.id}
+                song={song}
+                index={index}
+                syncedDuration={syncedDuration}
+                targetBPM={targetBPM}
+                onRemove={handleRemoveSong}
+              />
             );
           })
         )}
       </ScrollView>
     </View>
+  );
+}
+
+// Animated song item component with fade-in effect
+function AnimatedSongItem({ song, index, syncedDuration, targetBPM, onRemove }) {
+  const [fadeAnim] = useState(new Animated.Value(0));
+  const [scaleAnim] = useState(new Animated.Value(0.8));
+
+  React.useEffect(() => {
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 400,
+        delay: index * 100, // Stagger animation
+        useNativeDriver: true,
+      }),
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        tension: 50,
+        friction: 7,
+        delay: index * 100,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, []);
+
+  return (
+    <Animated.View
+      style={[
+        styles.songItem,
+        {
+          opacity: fadeAnim,
+          transform: [{ scale: scaleAnim }],
+        },
+      ]}
+    >
+      <View style={styles.songInfo}>
+        <Text style={styles.songNumber}>{index + 1}</Text>
+        <View style={styles.songDetails}>
+          <Text style={styles.songName} numberOfLines={1}>
+            {song.name}
+          </Text>
+          <Text style={styles.songMeta}>
+            {song.originalBPM.toFixed(0)} BPM → {targetBPM} BPM | {syncedDuration.toFixed(0)}s
+          </Text>
+        </View>
+      </View>
+      <TouchableOpacity 
+        style={styles.removeButton}
+        onPress={() => onRemove(song.id)}
+      >
+        <Text style={styles.removeButtonText}>✕</Text>
+      </TouchableOpacity>
+    </Animated.View>
   );
 }
 
@@ -110,6 +185,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 15,
     paddingVertical: 8,
     borderRadius: 20,
+    minWidth: 120,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addButtonDisabled: {
+    opacity: 0.6,
   },
   addButtonText: {
     color: '#000',
@@ -183,4 +264,3 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
 });
-

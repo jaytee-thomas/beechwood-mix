@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, ActivityIndicator } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { Audio } from 'expo-av';
 
 export default function Controls({ 
@@ -13,6 +14,7 @@ export default function Controls({
 }) {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [isLoading, setIsLoading] = useState(false);
   const soundRef = useRef(null);
 
   useEffect(() => {
@@ -25,9 +27,14 @@ export default function Controls({
 
   const playMix = async () => {
     if (songs.length === 0) {
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
       Alert.alert('No Songs', 'Please add songs to your mix first');
       return;
     }
+
+    // Heavy haptic for main action
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    setIsLoading(true);
 
     try {
       await Audio.setAudioModeAsync({
@@ -47,7 +54,7 @@ export default function Controls({
         { 
           shouldPlay: true,
           rate: playbackRate,
-          shouldCorrectPitch: true, // Keep pitch the same
+          shouldCorrectPitch: true,
         }
       );
 
@@ -58,7 +65,6 @@ export default function Controls({
           setCurrentTime(status.positionMillis / 1000);
           setDuration(status.durationMillis / 1000);
 
-          // Auto-advance to next song
           if (status.didJustFinish) {
             if (currentSongIndex < songs.length - 1) {
               setCurrentSongIndex(currentSongIndex + 1);
@@ -66,19 +72,29 @@ export default function Controls({
             } else {
               setIsPlaying(false);
               setCurrentSongIndex(0);
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
             }
           }
         }
       });
 
       setIsPlaying(true);
+      // Success haptic
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (error) {
+      // Error haptic
+      await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Alert.alert('Playback Error', 'Could not play audio');
       console.error(error);
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const pauseMix = async () => {
+    // Medium haptic
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    
     if (soundRef.current) {
       await soundRef.current.pauseAsync();
       setIsPlaying(false);
@@ -86,6 +102,9 @@ export default function Controls({
   };
 
   const stopMix = async () => {
+    // Heavy haptic for destructive action
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    
     if (soundRef.current) {
       await soundRef.current.stopAsync();
       await soundRef.current.unloadAsync();
@@ -94,6 +113,9 @@ export default function Controls({
     setIsPlaying(false);
     setCurrentSongIndex(0);
     setCurrentTime(0);
+    
+    // Light success haptic
+    await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
   };
 
   const formatTime = (seconds) => {
@@ -119,10 +141,15 @@ export default function Controls({
       <View style={styles.buttons}>
         {!isPlaying ? (
           <TouchableOpacity 
-            style={[styles.button, styles.playButton]}
+            style={[styles.button, styles.playButton, isLoading && styles.buttonDisabled]}
             onPress={playMix}
+            disabled={isLoading}
           >
-            <Text style={styles.buttonText}>▶ Play Mix</Text>
+            {isLoading ? (
+              <ActivityIndicator color="#000" />
+            ) : (
+              <Text style={styles.buttonText}>▶ Play Mix</Text>
+            )}
           </TouchableOpacity>
         ) : (
           <TouchableOpacity 
@@ -181,6 +208,11 @@ const styles = StyleSheet.create({
     borderRadius: 25,
     marginHorizontal: 5,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 50,
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
   playButton: {
     backgroundColor: '#00ff88',
@@ -197,4 +229,3 @@ const styles = StyleSheet.create({
     color: '#000',
   },
 });
-
